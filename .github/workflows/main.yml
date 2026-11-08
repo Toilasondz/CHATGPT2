@@ -1,0 +1,75 @@
+name: Build H SON Independent Menu v3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  verify-and-build:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: brew install ldid dpkg make
+
+      - name: Install Theos and iOS SDKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          THEOS="$HOME/theos"
+
+          if [ ! -f "$THEOS/makefiles/common.mk" ]; then
+            git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          else
+            git -C "$THEOS" submodule update --init --recursive
+          fi
+
+          SDK_FOUND=""
+          if [ -d "$THEOS/sdks" ]; then
+            SDK_FOUND="$(find "$THEOS/sdks" -maxdepth 1 -name '*.sdk' -print -quit || true)"
+          fi
+
+          if [ -z "$SDK_FOUND" ]; then
+            # Theos may already create this directory. Remove only this SDK
+            # directory when it contains no usable .sdk, then clone the SDK repo.
+            rm -rf "$THEOS/sdks"
+            git clone --depth 1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          else
+            echo "Found an existing iOS SDK: $SDK_FOUND"
+          fi
+
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+
+      - name: Verify H SON menu and independent feature mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-feature-map.py
+
+      - name: Build rootless ARM64 tweak
+        shell: bash
+        run: |
+          set -euo pipefail
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find .theos/obj -name 'HSONModernMenu.dylib' -exec cp {} release/ \;
+          find packages -maxdepth 1 -name '*.deb' -exec cp {} release/ \; 2>/dev/null || true
+          cp BUILD_STATUS.md README.md NativeLogic/FEATURE_INDEX_MAP.md release/
+          test -s release/HSONModernMenu.dylib
+          file release/HSONModernMenu.dylib
+          lipo -info release/HSONModernMenu.dylib
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: VideoStarTool-HSon-Independent-Menu-v3-arm64
+          path: release/*
